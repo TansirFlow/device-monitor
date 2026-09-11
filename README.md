@@ -260,6 +260,53 @@ mon-agent -version
 
 ---
 
+## 管理后台
+
+浏览器打开 `/admin.html`，用**独立的管理员账号**登录 —— 它与看板的 `admin_token` 不是一回事，
+只用于本后台：
+
+- **首次启动**会自动创建账号：口令取环境变量 `MON_MASTER_ADMIN_PASSWORD`；没设就随机生成一个，
+  并**打印到启动日志里一次**。刻意不做"开放一个初始化页面"：那样谁先访问到谁就是管理员了。
+- 登录后可以：新建节点、手动填写或随机生成上报令牌、生成 / 轮换 / 撤销安装码、停用节点、改密码。
+- 每个节点都直接给出两条一键命令（安装码已填好）：
+
+```bash
+curl -fsSL 'https://monitor.example.com/api/v1/install.sh?node=web-01&code=<安装码>' | sudo sh
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression ((Invoke-WebRequest -UseBasicParsing 'https://monitor.example.com/api/v1/install.ps1?node=web-01&code=<安装码>').Content)"
+```
+
+命令里只有节点名与安装码，**不含上报令牌**；令牌由主控校验通过后写进脚本。脚本在目标机器上会：
+下载客户端 → 建专用低权限用户 → 写配置（600）→ 装 systemd 单元（与 `deploy/mon-agent.service`
+同样的加固）→ 自检上报一条。架构（amd64/arm64）由脚本自动识别。
+
+### 令牌存在哪
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 管理员账号 | `<data_dir>/admin.json` | PBKDF2-HMAC-SHA256（21 万次迭代 + 随机盐），600 |
+| 节点令牌 / 安装码 | `<data_dir>/nodes.json` | 600。主控**永不改写**自己的 `master.json` |
+
+**备份必须连 `data_dir` 一起做** —— 只备份配置文件会丢掉所有后台创建的令牌。
+配置里的 `report_token` / `node_tokens` 仍然有效：启动时作为种子合并进来，老部署不用迁移。
+
+想让一键安装连客户端二进制一起分发：把 `dist/` 里的二进制放进某个目录，在 `master.json` 里设
+`agent_dir` 并重启主控。没设的话只生成脚本，二进制下载会返回 404。
+
+### 这些约束是刻意设计的
+
+| 约束 | 为什么 |
+|---|---|
+| 写接口要求会话 Cookie（HttpOnly + SameSite=Strict）**加**自定义请求头 | HTML 表单设不了请求头，跨站 fetch 会被 CORS 挡住 —— 没有 CSRF 面 |
+| 登录失败按 IP 限流；用户名错与口令错返回同一句话 | 不给爆破和用户名枚举留口子 |
+| 改密码后**所有**会话立即失效 | 会话密钥由口令哈希派生，改密即轮换 |
+| 安装码独立于上报令牌，可单独轮换 / 撤销 | 把"安装命令贴到工单里"的爆炸半径压到一个节点，且不影响在跑的机器 |
+| 后台停用的节点，即使主控还配着全局 `report_token` 也上报不了 | 否则"停用"形同虚设 |
+
+---
+
 ## HTTP API
 
 | 方法 | 路径 | 鉴权 | 说明 |
@@ -454,6 +501,10 @@ Windows 节点用 `install-agent.ps1` 装完后，CPU（含物理核心/线程�
 | Windows 下 agent 的中文提示是乱码 | PowerShell 按系统 ANSI 码页（中文 Windows 是 GBK）解码原生命令输出，而 agent 写的是 UTF-8。先执行 `[Console]::OutputEncoding = [Text.Encoding]::UTF8`（或 `chcp 65001`）再看；`install-agent.ps1` 的自检已经替你做了这层转换 |
 | 主控启动报"监听地址不是回环地址，但未设置 admin_token" | 安全兜底。设 `admin_token`，或确认风险后设 `MON_MASTER_ALLOW_OPEN_READ=1` |
 | 看板不刷新 | 前端每 5 秒拉一次、图表每 15 秒重绘一次；确认浏览器没装拦截扩展 |
+| 忘了管理后台密码 | 删掉 `<data_dir>/admin.json` 后用 `MON_MASTER_ADMIN_PASSWORD=<新密码>` 重启一次（节点令牌不受影响，它们在 `nodes.json` 里） |
+| 一键安装脚本里下载二进制 404 | 主控没配 `agent_dir`，或目录里没有对应架构的文件。文件名必须是 `mon-agent-linux-amd64` 这类白名单名 |
+| 后台轮换令牌后节点开始上报失败 | 预期行为：已安装机器上的配置还是旧令牌。重新执行安装脚本，或改 `/etc/mon-agent/agent.json` 后 `systemctl restart mon-agent` |
+| 后台停用了节点却还在收到它的数据 | 检查该节点是否真的由后台托管（`source` 显示为 `managed`）；若它只用配置里的全局 `report_token` 上报，后台需要先接管它 |
 
 自检顺序建议：`-once`（采集）→ `-dry-run`（序列化）→ `-selftest`（网络 + 鉴权）→ 看板。
 
@@ -484,11 +535,19 @@ server-monitor/
 ├── master/                   # 主控
 │   ├── main.go               # HTTP 服务、优雅关闭、维护任务
 │   ├── api.go                # 上报接收 + 只读查询 + 降采样 + 温度指标解析
+│   ├── api_admin.go          # 管理后台：登录/会话/CSRF、节点与令牌、安装脚本、二进制分发
+│   ├── admin.go              # 管理员账号（PBKDF2）与 HMAC 会话签发/校验
+│   ├── nodestore.go          # 节点令牌与安装码（nodes.json，运行期可变、立即生效）
+│   ├── installscript.go      # 一键安装脚本模板（Linux sh / Windows ps1）
 │   ├── store.go              # JSONL 存储、内存缓存、gzip 归档、保留期清理
 │   ├── config.go             # 配置与启动期强制校验
 │   ├── ratelimit.go          # 令牌桶限流
 │   ├── api_test.go           # 温度指标解析与聚合测试
-│   └── web/                  # 内嵌看板（HTML/CSS/JS，零依赖零构建）
+│   ├── admin_test.go         # PBKDF2 对拍向量、账号与会话生命周期
+│   ├── admin_api_test.go     # 管理端鉴权/CSRF、节点存储、安装脚本、二进制白名单
+│   └── web/                  # 内嵌前端（HTML/CSS/JS，零依赖零构建）
+│       ├── index.html        # 看板
+│       └── admin.html        # 管理后台
 ├── deploy/                   # systemd / Docker / nginx / 一键安装脚本（install-agent.sh · install-agent.ps1）
 ├── docs/
 │   ├── deploy-master.md      # 主控部署教程（从空机器到看板可用）

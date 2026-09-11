@@ -58,11 +58,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 管理后台的两个存储：账号（admin.json）与节点令牌/安装码（nodes.json）。
+	// 都落在 data_dir 下 —— 那是主控唯一的可写目录，主控绝不改写自己的配置文件。
+	admin, err := ensureAdmin(cfg.DataDir)
+	if err != nil {
+		fatalf("初始化管理员账号失败: %v", err)
+	}
+	nodes := newNodeStore(cfg.DataDir, cfg)
+	if err := nodes.load(); err != nil {
+		fatalf("加载节点令牌失败: %v", err)
+	}
+
 	go maintenanceLoop(ctx, store, cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           NewServer(cfg, store, webHandler()).Routes(),
+		Handler:           NewServer(cfg, store, webHandler(), admin, nodes).Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -77,6 +88,10 @@ func main() {
 			version, cfg.Listen, cfg.DataDir, cfg.RetentionDays)
 		if cfg.AdminToken == "" {
 			log.Printf("提示：未设置 admin_token，看板仅对本机开放（配置校验已强制回环监听）")
+		}
+		log.Printf("管理后台：http://%s/admin.html  （管理员账号 %q）", cfg.Listen, admin.username())
+		if cfg.AgentDir == "" {
+			log.Printf("提示：未配置 agent_dir，一键安装只会生成脚本、不提供客户端二进制下载")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err

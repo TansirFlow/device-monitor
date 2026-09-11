@@ -107,6 +107,22 @@ must_contain 'master 必须限制上报请求体大小' \
 must_contain 'master 必须限制温度指标名的字符集（不允许把任意字符串当指标查询）' \
   '\btempMetricKind\(' "$MASTER"
 
+printf '\n-- master 管理后台：账号 / 令牌 / 一键安装 --\n'
+must_contain '管理端写接口必须统一走「会话 + CSRF」校验（Cookie 认证不能直接信任）' \
+  'requireAdminWrite' "$MASTER"
+must_contain '管理端必须做 CSRF 防护（自定义请求头，浏览器表单伪造不了）' \
+  'csrfHeader' "$MASTER"
+must_contain '会话 Cookie 必须 HttpOnly（XSS 拿不到会话）' \
+  'HttpOnly: true' "$MASTER"
+must_contain '账号与令牌落盘必须走原子写（写坏就等于把后台锁死）' \
+  'writeFileAtomic' "$MASTER"
+must_contain '一键安装脚本必须凭节点 + 安装码换取（不能被匿名拉取）' \
+  'validCode' "$MASTER"
+must_contain '口令派生必须带随机盐且用恒定时间比较' \
+  'subtle\.ConstantTimeCompare' "$MASTER"
+must_not_contain '主控不得改写自己的配置文件（令牌只落 data_dir，配置保持只读）' \
+  '(saveConfig|writeConfig|MarshalIndent\(s\.cfg)' "$MASTER"
+
 printf '\n'
 if [ "$FAIL" -eq 0 ]; then
   printf '结论：全部通过 —— 主控在架构上不具备操作节点服务器的手段。\n'

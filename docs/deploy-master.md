@@ -63,7 +63,7 @@ sudo install -d -m 0700 -o mon-master -g mon-master /var/lib/mon-master
 
 ```bash
 sudo install -m 0755 mon-master-linux-amd64 /usr/local/bin/mon-master
-mon-master -version      # → mon-master 1.2.0 (built ...)
+mon-master -version      # → mon-master 1.3.0 (built ...)
 ```
 
 `dist/SHA256SUMS.txt` 里有全部产物的校验和，公网传输后建议核对：
@@ -136,7 +136,8 @@ sudo chmod 600      /etc/mon-master/master.json
 | `listen` | `127.0.0.1:8080` | 监听地址。**保持回环**，由 nginx 反代 |
 | `data_dir` | `./data` | 数据根目录。每节点一个子目录：`<node_id>/YYYY-MM-DD.jsonl` |
 | `title` | `服务器监控` | 看板标题 |
-| `public_base` | 空 | 对外地址，**仅用于文档展示**，不影响监听行为 |
+| `public_base` | 空 | 对外地址。也用作**生成一键安装脚本时写进脚本里的主控地址**；留空则按请求的协议与 Host 推断 |
+| `agent_dir` | 空 | 客户端二进制目录。设了它，一键安装才能连二进制一起分发（见[第 9.2 节](#92-让一键安装连二进制一起分发)） |
 | `report_token` | 空 | 全局上报令牌（≥12 字符）。与 `node_tokens` 二选一 |
 | `node_tokens` | 空 | 一节点一令牌，映射 `节点名 → 令牌`。**非空时优先于 `report_token`** |
 | `admin_token` | 空 | 读取令牌（≥12 字符）。为空时**只允许本机访问**看板 |
@@ -186,7 +187,7 @@ journalctl -u mon-master -f
 
 ```
 已从磁盘恢复 1 个节点的最新状态
-mon-master 1.2.0 已启动，监听 127.0.0.1:8080，数据目录 /var/lib/mon-master，保留 30 天
+mon-master 1.3.0 已启动，监听 127.0.0.1:8080，数据目录 /var/lib/mon-master，保留 30 天
 ```
 
 ### 5.2 三个验收动作
@@ -197,7 +198,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 
 # ② 元信息（无需鉴权）
 curl -fsS http://127.0.0.1:8080/api/v1/meta
-# {"name":"mon-master","read_auth":true,"retention_days":30,"version":"1.2.0",...}
+# {"name":"mon-master","read_auth":true,"retention_days":30,"version":"1.3.0",...}
 
 # ③ 模拟一条上报（把 web-01 换成你 node_tokens 里真实存在的节点名）
 curl -fsS -X POST http://127.0.0.1:8080/api/v1/report \
@@ -283,8 +284,8 @@ sudo ufw enable
 
 ```bash
 # 1) 造镜像（Dockerfile 会把版本号编译进去）
-docker build -f deploy/Dockerfile.master -t mon-master:1.2.0 .
-docker build -f deploy/Dockerfile.agent  -t mon-agent:1.2.0  .
+docker build -f deploy/Dockerfile.master -t mon-master:1.3.0 .
+docker build -f deploy/Dockerfile.agent  -t mon-agent:1.3.0  .
 
 # 2) 起服务（compose 里 master 已经把数据目录挂到卷上）
 docker compose -f deploy/docker-compose.yml up -d
@@ -313,7 +314,67 @@ docker compose -f deploy/docker-compose.yml logs -f master
 
 ---
 
-## 9. 日常运维
+## 9. 管理后台与一键安装节点
+
+### 9.1 首次登录
+
+主控启动时会确保存在一个管理员账号：
+
+- 设了 `MON_MASTER_ADMIN_PASSWORD` → 用它初始化；
+- 没设 → 随机生成一个口令并**打印到启动日志里一次**（之后不再显示）。
+
+打开 `https://monitor.example.com/admin.html` 登录。**刻意不做**"开放一个初始化页面"这种设计：
+那样谁先访问到谁就是管理员了。登录后建议在「改密码」里换掉初始口令。
+
+忘了口令怎么办：删掉 `<data_dir>/admin.json`，再带 `MON_MASTER_ADMIN_PASSWORD` 重启一次。
+节点令牌在 `nodes.json` 里，**不受影响**。
+
+### 9.2 让"一键安装"连二进制一起分发
+
+默认只生成脚本、不管二进制。把 `dist/` 里的产物放到主控机器上：
+
+```bash
+sudo install -d -m 0755 /var/lib/mon-master/agent
+sudo install -m 0644 mon-agent-linux-amd64 mon-agent-linux-arm64 mon-agent-windows-amd64.exe \
+     /var/lib/mon-master/agent/
+```
+
+然后在 `master.json` 里加一行并重启主控：
+
+```json
+{ "agent_dir": "/var/lib/mon-master/agent" }
+```
+
+文件名必须命中白名单：`mon-agent-{linux,windows,darwin}-{amd64,arm64}[.exe]`。
+升级客户端时替换该目录里的文件即可，节点侧不用动。
+
+### 9.3 装一台节点
+
+后台「新建节点」→ 复制对应系统的一键命令 → 在目标机器上执行：
+
+```bash
+curl -fsSL 'https://monitor.example.com/api/v1/install.sh?node=web-01&code=<安装码>' | sudo sh
+```
+
+脚本会：识别架构 → 下载二进制 → 建 `mon-agent` 系统用户 → 写 `/etc/mon-agent/agent.json`
+（600）→ 装 systemd 单元（与 `deploy/mon-agent.service` 同样的加固）→ 自检上报一条。
+离线机器改为下载脚本（`sh_url` / `ps1_url`）再手工传过去执行。
+
+### 9.4 备份要连 data_dir 一起做
+
+后台创建的令牌与安装码都落在 `<data_dir>/nodes.json` —— 主控**不会**把它们写回
+`master.json`（避免主控改写自己的配置、以及与 `MON_MASTER_*` 环境变量覆盖打架）。
+所以备份命令仍然是：
+
+```bash
+sudo tar czf mon-master-$(date +%F).tar.gz -C /var/lib mon-master   # 含 nodes.json / admin.json
+```
+
+只备份 `/etc/mon-master/master.json` 会丢掉全部后台创建的令牌。
+
+---
+
+## 10. 日常运维
 
 ### 备份
 
@@ -362,7 +423,7 @@ sudo rm -rf /etc/mon-master          # 配置（含令牌）
 
 ---
 
-## 10. 故障排查
+## 11. 故障排查
 
 | 现象 | 原因与处理 |
 |---|---|

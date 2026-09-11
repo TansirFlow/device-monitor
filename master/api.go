@@ -20,15 +20,24 @@ type Server struct {
 	limit *rateLimiter
 	start time.Time
 	web   http.Handler
+
+	// 管理后台：账号/会话 与 节点令牌。两者都由 main 装配后注入，
+	// 为空时管理端接口一律 404（老部署不配也能照常跑）。
+	admin      *adminStore
+	nodes      *nodeStore
+	loginLimit *rateLimiter
 }
 
-func NewServer(cfg *Config, store *Store, web http.Handler) *Server {
+func NewServer(cfg *Config, store *Store, web http.Handler, admin *adminStore, nodes *nodeStore) *Server {
 	return &Server{
-		cfg:   cfg,
-		store: store,
-		limit: newRateLimiter(cfg.RateLimitPerSec),
-		start: time.Now(),
-		web:   web,
+		cfg:        cfg,
+		store:      store,
+		limit:      newRateLimiter(cfg.RateLimitPerSec),
+		start:      time.Now(),
+		web:        web,
+		admin:      admin,
+		nodes:      nodes,
+		loginLimit: newRateLimiter(0.1), // 登录入口：突发 10 次，之后每 10 秒一次
 	}
 }
 
@@ -39,6 +48,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/history", s.handleHistory)
 	mux.HandleFunc("/api/v1/meta", s.handleMeta)
 	mux.HandleFunc("/healthz", s.handleHealth)
+
+	// 管理后台：登录、节点与令牌管理
+	mux.HandleFunc("/api/v1/admin/state", s.handleAdminState)
+	mux.HandleFunc("/api/v1/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("/api/v1/admin/logout", s.handleAdminLogout)
+	mux.HandleFunc("/api/v1/admin/password", s.handleAdminPassword)
+	mux.HandleFunc("/api/v1/admin/nodes", s.handleAdminNodes)
+	mux.HandleFunc("/api/v1/admin/nodes/", s.handleAdminNodeItem)
+
+	// 节点侧自助安装：凭 node + 安装码换取脚本与二进制（主控始终只应答）
+	mux.HandleFunc("/api/v1/install.sh", s.handleInstallScript)
+	mux.HandleFunc("/api/v1/install.ps1", s.handleInstallScript)
+	mux.HandleFunc(agentURLPrefix, s.handleAgentDownload)
+
 	mux.Handle("/", s.web)
 	return s.withCommonHeaders(mux)
 }
@@ -95,7 +118,8 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 令牌与节点绑定：node_tokens 模式下，A 节点的令牌无法伪造 B 节点的数据。
-	expected, known := s.cfg.tokenOf(sm.NodeID)
+	// 后台托管的令牌优先（新增/轮换后立即生效，不需要重启），否则回退到配置文件。
+	expected, known := s.nodeTokenOf(sm.NodeID)
 	if !known {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "该节点未授权"})
 		return
@@ -562,6 +586,14 @@ func (s *Server) requireRead(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// nodeTokenOf 统一的上报令牌查询入口。
+func (s *Server) nodeTokenOf(nodeID string) (string, bool) {
+	if s.nodes != nil {
+		return s.nodes.tokenOf(nodeID)
+	}
+	return s.cfg.tokenOf(nodeID)
 }
 
 func (s *Server) clientIP(r *http.Request) string {

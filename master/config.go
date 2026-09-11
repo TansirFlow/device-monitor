@@ -16,7 +16,11 @@ type Config struct {
 	Listen     string `json:"listen"`      // 默认 127.0.0.1:8080
 	DataDir    string `json:"data_dir"`    // 默认 ./data
 	Title      string `json:"title"`       // 看板标题
-	PublicBase string `json:"public_base"` // 反代对外地址，仅用于文档展示
+	PublicBase string `json:"public_base"` // 反代对外地址；也用作生成安装脚本时的主控地址
+
+	// AgentDir 存放待分发的客户端二进制（mon-agent-linux-amd64 等）。
+	// 为空则「一键安装」只生成脚本、不提供二进制下载。
+	AgentDir string `json:"agent_dir"`
 
 	// 上报鉴权：NodeTokens 非空时使用「一节点一令牌」，否则回退到全局 ReportToken。
 	ReportToken string            `json:"report_token"`
@@ -103,6 +107,16 @@ func (c *Config) validate() error {
 	}
 	if c.Title == "" {
 		c.Title = "服务器监控"
+	}
+	if c.AgentDir != "" {
+		c.AgentDir = strings.TrimSpace(c.AgentDir)
+		fi, err := os.Stat(c.AgentDir)
+		if err != nil {
+			return fmt.Errorf("agent_dir %q 不可用: %w", c.AgentDir, err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("agent_dir %q 不是一个目录", c.AgentDir)
+		}
 	}
 
 	if c.ReportToken == "" && len(c.NodeTokens) == 0 {

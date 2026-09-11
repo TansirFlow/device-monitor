@@ -3,6 +3,9 @@
   "data_dir": "./data",
   "title": "服务器监控",
 
+  "public_base": "https://monitor.example.com",
+  "agent_dir": "",
+
   "report_token": "全局上报令牌；如果下面配了 node_tokens，则以 node_tokens 为准",
   "node_tokens": {
     "web-01": "节点 web-01 专属的上报令牌",
