@@ -1,0 +1,43 @@
+{
+  "node_id": "web-01",
+  "master_url": "https://mon.example.com/api/v1/report",
+  "token": "请替换为 32 字节随机串（至少 12 字符）",
+  "interval_sec": 10,
+  "timeout_sec": 8,
+  "buffer_max": 120,
+  "use_env_proxy": false,
+
+  "labels": {
+    "env": "prod",
+    "zone": "cn-hz-a",
+    "role": "web"
+  },
+
+  "collect": {
+    "cpu": true,
+    "mem": true,
+    "disk": true,
+    "net": true,
+    "gpu": true,
+    "per_core": false,
+    "disk_mounts": [],
+
+    "temp": true,
+    "temp_limit": 32,
+    "temp_exclude": []
+  },
+
+  "gpu": {
+    "enabled": true,
+    "binary": "nvidia-smi",
+    "include_uuid": true
+  },
+
+  "tls": {
+    "insecure_skip_verify": false,
+    "ca_file": "",
+    "cert_file": "",
+    "key_file": "",
+    "server_name": ""
+  }
+}

@@ -1,0 +1,76 @@
+# 主控前置反代的参考配置。
+#
+# 关键点：master 监听 127.0.0.1，由 nginx 负责 TLS 与限流；
+# 这样节点上报走 HTTPS，而 master 本身不直接暴露在公网。
+
+limit_req_zone  $binary_remote_addr zone=mon_report:10m rate=10r/s;
+limit_req_zone  $binary_remote_addr zone=mon_read:10m   rate=30r/s;
+
+upstream mon_master {
+    server 127.0.0.1:8080;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    server_name monitor.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name monitor.example.com;
+
+    ssl_certificate     /etc/nginx/tls/monitor.crt;
+    ssl_certificate_key /etc/nginx/tls/monitor.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # 只允许必要的方法
+    if ($request_method !~ ^(GET|POST|HEAD)$) { return 405; }
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # ---- 上报入口：小体积、高频率，单独限流 ----
+    location = /api/v1/report {
+        limit_req zone=mon_report burst=40 nodelay;
+        client_max_body_size 256k;     # 与 master 的 max_body_kb 对应
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 15s;
+        proxy_pass http://mon_master;
+    }
+
+    # ---- 只读查询与看板 ----
+    location / {
+        limit_req zone=mon_read burst=60 nodelay;
+        client_max_body_size 1m;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://mon_master;
+    }
+}
+
+# 更严格的方案（推荐用于跨公网部署）：
+#   只对节点 IP 段开放 /api/v1/report，只对办公网段开放 /（看板）。
+#
+#   location = /api/v1/report {
+#       allow 10.0.0.0/8;
+#       allow 192.168.0.0/16;
+#       deny  all;
+#       ...
+#   }
+#   location / {
+#       allow 203.0.113.0/24;   # 办公网出口
+#       deny  all;
+#       ...
+#   }
+#
+# 如果加上 IP 白名单，请在 master 配置里设 "trust_proxy": true，
+# 否则限流会把所有节点都算作 nginx 的 IP。

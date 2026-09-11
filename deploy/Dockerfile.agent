@@ -1,0 +1,26 @@
+# 采集器镜像。适合以 DaemonSet / 容器方式采集。
+# 想要 GPU 指标时，需要把宿主机的 nvidia 设备与 nvidia-smi 暴露进来（见文末）。
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY agent/ ./agent/
+RUN cd agent && CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags "-s -w -X main.version=1.2.0" -o /out/mon-agent .
+
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/mon-agent /mon-agent
+
+USER 65532:65532
+ENTRYPOINT ["/mon-agent"]
+
+# 需要 GPU 指标时，在 compose / k8s 里这样加：
+#   runtime: nvidia
+#   environment: [ NVIDIA_VISIBLE_DEVICES=all ]
+#   volumes:
+#     - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+#     - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro
+#
+# 需要 CPU / 主板 / 硬盘温度时，必须只读挂载宿主机 sysfs：
+#   volumes:
+#     - /sys:/sys:ro
+# 容器默认的 /sys 里看不到宿主机的 hwmon 设备，不挂的话温度列表是空的。

@@ -1,0 +1,26 @@
+# 主控镜像：多阶段构建，最终层是 scratch，镜像体积约等于二进制体积。
+#   docker build -f deploy/Dockerfile.master -t mon-master:1.0.0 ..
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY master/ ./master/
+RUN cd master && CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags "-s -w -X main.version=1.2.0" -o /out/mon-master .
+
+FROM scratch
+# 只拷贝 CA 证书和时区数据，其余一概不要
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=build /out/mon-master /mon-master
+
+# 用非 root、且没有 shell 的用户运行
+USER 65532:65532
+VOLUME ["/data"]
+EXPOSE 8080
+
+ENV MON_MASTER_LISTEN=0.0.0.0:8080 \
+    MON_MASTER_DATA_DIR=/data
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
+  CMD ["/mon-master", "-version"]
+
+ENTRYPOINT ["/mon-master"]

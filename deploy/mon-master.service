@@ -1,0 +1,41 @@
+[Unit]
+Description=Server Monitor Master（指标接收 + 只读看板）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mon-master
+Group=mon-master
+ExecStart=/usr/local/bin/mon-master -config /etc/mon-master/master.json
+
+StateDirectory=mon-master
+ReadWritePaths=/var/lib/mon-master
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mon-master
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,65 @@
+[Unit]
+Description=Server Monitor Agent（单向指标上报）
+Documentation=file:/usr/local/share/mon-agent/SECURITY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mon-agent
+Group=mon-agent
+ExecStart=/usr/local/bin/mon-agent -config /etc/mon-agent/agent.json
+
+# ============================================================
+# 进程加固。agent 本身已经不监听端口、不写文件、不执行外部命令
+# （GPU 采集除外），这里再由内核把这些约束固化一遍：
+# 即使 agent 进程被完全控制，它也没有落脚点。
+# ============================================================
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateUsers=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+# 只需要 IPv4/IPv6/Unix 三种地址族；AF_NETLINK 等一律不用
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# 温度采集读的是 /sys/class/hwmon 与 /sys/class/thermal。
+# 上面的 ProtectKernelTunables=yes 会把 /sys 置为只读——这正是我们要的：
+# 采集只需要读，不需要写，所以这套加固不需要为温度放宽任何一项。
+
+# 不需要任何特权
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# 不需要任何可写路径（连日志都走 stdout 交给 journald）
+# 注意：不要把 ProtectSystem=strict 与 ReadWritePaths 一起放开，
+# agent 运行期不产生任何持久化状态。
+UMask=0077
+
+# 资源上限，避免异常时影响宿主机
+MemoryMax=256M
+CPUQuota=20%
+TasksMax=64
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mon-agent
+
+[Install]
+WantedBy=multi-user.target

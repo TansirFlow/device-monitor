@@ -1,0 +1,70 @@
+# 一键起一套演示环境：1 个主控 + 1 个采集器。
+#
+#   cd server-monitor
+#   MON_REPORT_TOKEN=$(openssl rand -hex 24) docker compose -f deploy/docker-compose.yml up -d
+#   浏览器打开 http://127.0.0.1:8080
+#
+# 关于容器里采集到的是什么：
+#   Linux 容器的 /proc/stat、/proc/meminfo 反映的是**宿主内核**的全局数据，
+#   所以 CPU / 内存 指标基本等于宿主机指标（装了 lxcfs 的除外）。
+#   磁盘只反映容器自己可见的挂载点——需要看宿主机磁盘，就把它只读挂进来，
+#   然后在 agent 配置里用 collect.disk_mounts 指到那个路径。
+#   温度传感器（/sys/class/hwmon、/sys/class/thermal）在默认的容器 /sys 里
+#   是看不到的，所以下面把宿主机的 /sys 只读挂进来；否则温度列表会是空的。
+
+services:
+  master:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.master
+    image: mon-master:1.2.0
+    container_name: mon-master
+    restart: unless-stopped
+    ports:
+      # 默认只映射到本机。要让节点从外部上报，改成 "8080:8080"，
+      # 并且必须设置 admin_token 与前置 TLS 反代。
+      - "127.0.0.1:8080:8080"
+    environment:
+      MON_MASTER_LISTEN: "0.0.0.0:8080"
+      MON_MASTER_DATA_DIR: "/data"
+      MON_MASTER_REPORT_TOKEN: "${MON_REPORT_TOKEN:-devtoken-devtoken-1234}"
+      MON_MASTER_ADMIN_TOKEN: "${MON_ADMIN_TOKEN:-}"
+    volumes:
+      - master-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    image: mon-agent:1.2.0
+    container_name: mon-agent
+    restart: unless-stopped
+    depends_on:
+      - master
+    environment:
+      MON_NODE_ID: "demo-host"
+      MON_MASTER_URL: "http://master:8080/api/v1/report"
+      MON_TOKEN: "${MON_REPORT_TOKEN:-devtoken-devtoken-1234}"
+      MON_INTERVAL_SEC: "5"
+      MON_LABELS: "env=demo,role=docker-host"
+      # 仅因为 compose 内网是明文 http；生产环境请用 https 并去掉这一行。
+      MON_ALLOW_INSECURE_HTTP: "1"
+    volumes:
+      # 只读挂载宿主 sysfs，否则读不到温度传感器。
+      # agent 只读这些文件、不写回，:ro 已经足够。
+      - /sys:/sys:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  master-data:

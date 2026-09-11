@@ -1,0 +1,20 @@
+# 构建产物
+dist/
+
+# 运行时数据（指标落盘）
+data/
+*.jsonl
+*.jsonl.gz
+
+# 本地联调配置与数据（含明文令牌，绝不入库）
+.devtest/
+
+# 真实配置（示例文件是 *.example.json，这些是真配置）
+agent/agent.json
+master/master.json
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store

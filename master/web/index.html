@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>服务器监控</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="pulse" id="pulse"></span>
+    <h1 id="title">服务器监控</h1>
+  </div>
+
+  <div class="chips" id="summary"></div>
+
+  <div class="tools">
+    <label class="field">
+      <span>时间范围</span>
+      <select id="range">
+        <option value="15">最近 15 分钟</option>
+        <option value="60" selected>最近 1 小时</option>
+        <option value="360">最近 6 小时</option>
+        <option value="1440">最近 24 小时</option>
+        <option value="10080">最近 7 天</option>
+      </select>
+    </label>
+    <button id="tokenBtn" class="icon-btn" title="设置访问令牌">令牌</button>
+    <button id="themeBtn" class="icon-btn" title="切换主题">主题</button>
+  </div>
+</header>
+
+<main>
+  <section id="grid" class="grid"></section>
+  <div id="empty" class="empty hidden">
+    <p class="empty-title">还没有任何节点上报数据</p>
+    <p class="empty-sub">在节点上启动 agent 并指向本服务即可，参考 <code>README.md</code> 的 3 分钟接入指引。</p>
+  </div>
+  <p id="error" class="error hidden"></p>
+</main>
+
+<aside id="drawer" class="drawer hidden" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawerTitle">—</h2>
+      <p id="drawerSub" class="muted"></p>
+    </div>
+    <button id="drawerClose" class="icon-btn">关闭</button>
+  </div>
+  <div id="drawerBody" class="drawer-body"></div>
+</aside>
+<div id="scrim" class="scrim hidden"></div>
+
+<div id="tokenModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>访问令牌</h3>
+    <p class="muted">主控配置了 <code>admin_token</code> 时，查询接口需要携带它。令牌只保存在本机浏览器 localStorage，不会发送到其他任何地方。</p>
+    <input id="tokenInput" type="password" placeholder="粘贴 admin_token" autocomplete="off">
+    <p id="tokenHint" class="muted small"></p>
+    <div class="modal-actions">
+      <button id="tokenCancel" class="icon-btn">取消</button>
+      <button id="tokenClear" class="icon-btn">清除</button>
+      <button id="tokenSave" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
